@@ -6,7 +6,7 @@ jobs:
   lint_test:
     runs-on: ubuntu-18.04
     steps:
-    - uses: actions/checkout@v1
+    - uses: actions/checkout@v2
     - name: Set up Python 3.x
       uses: actions/setup-python@v1
       with:
@@ -28,10 +28,12 @@ jobs:
       with:
         python-version: 3.x
     - name: Make sdist
-      run: python3 setup.py sdist --formats=gztar
+      run: |
+        python3 -m pip install cython
+        python3 setup.py sdist --formats=gztar
     - name: Run docker
-    - run: |
-        docker build -f .ci/Dockerfile.armv7l -t pi_waveshare_adc/pi_waveshare_adc-armv7l
+      run: |
+        docker build -f .ci/Dockerfile.armv7l -t pi_waveshare_adc/pi_waveshare_adc-armv7l .
         docker cp "$(docker create pi_waveshare_adc/pi_waveshare_adc-armv7l)":/pi_waveshare_adc_output .
         ls
         cp pi_waveshare_adc_output/*.whl dist/
@@ -55,6 +57,7 @@ jobs:
         draft: true
 
   docs:
+    needs: artifacts
     runs-on: ubuntu-18.04
     steps:
     - uses: actions/checkout@v2
