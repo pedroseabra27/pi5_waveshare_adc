@@ -25,7 +25,7 @@ RUN python3 -m pip wheel --extra-index-url https://www.piwheels.org/simple . -w 
 RUN python3 -m pip install -e .[dev]
 
 RUN /bin/bash -c 'cd doc && \
-    make html && \
+    PYTHONPATH=$PYTHONPATH:../ make html && \
     cp -r build/html /pi_waveshare_adc_output/docs'
 
 RUN [ "cross-build-end" ]
