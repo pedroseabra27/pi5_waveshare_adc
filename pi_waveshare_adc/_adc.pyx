@@ -1,5 +1,7 @@
+"""ADS1256 ADC
+==============
 """
-"""
+
 # todo: handle error checking
 from posix.types cimport time_t, clockid_t, suseconds_t
 from cpython cimport array
@@ -1730,6 +1732,8 @@ cdef class ADS1256:
 
 
 cdef class WiringPiADS1256(ADS1256):
+    """WiringPi backend.
+    """
 
     def __init__(
             self, cs_pin=15, data_ready_pin=11, reset_pin=12, power_down_pin=13,
@@ -1779,6 +1783,8 @@ cdef class WiringPiADS1256(ADS1256):
 
 
 cdef class PiGPIOADS1256(ADS1256):
+    """PiGPIO backend.
+    """
 
     cdef int _spi_handle
 
