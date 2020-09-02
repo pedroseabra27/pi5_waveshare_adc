@@ -69,39 +69,7 @@ cdef dict rate_flag_to_val = {}
 
 
 cdef class ADS1256:
-    """
-    Hardware pin configuration must be
-    set up before initialization phase and can not be changed later.
-
-    Register/Configuration Flag settings are initialized, but these
-    can be changed during runtime via class properties.
-
-    Can not set ay adc stuff until it is setup.
-
-    for better performance: change sleep in data ready. Call sustained reading.
-
-    Data could be corrupt if it's taking too long to read e.g. if the pi
-    hiccups and sampling rate is too large and we read while data is updated.
-    This is especially the case when muxing.
-
-    Our sleep has minimum about 100 us resolution. So e.g. at 30kHz, we can't
-    afford to sleep while waiting for the input to change, because the time
-    between samples is 1 / 30kHz = 33us so if we sleep we'll miss samples.
-    Even at 1kHz sampling, we only have 1000us between samples or about 8-9
-    sleep cycles. So if we sleep too long, by the time we finish reading the
-    sample the next sample may already be converted and our read value would be
-    corrupted.
-
-    Consequently, we only sleep if the sampling rate is less than 500Hz.
-    Because with 2000 us between samples we have 15-20 sleep cycles available,
-    so the risk is much much less.
-
-    The consequence is that when sampling above 500Hz, the CPU will not get
-    any sleep if we do e.g. chunked reading. This is not a problem on e.g. a pi
-    4 with 4 cores. :attr:`do_data_ready_delay` controls this behavior.
-    If the rate is less than or equal to 500Hz and :attr:`do_data_ready_delay`
-    is True (the default) then we do a minimum sleep while waiting. Otherwise,
-    we never sleep.
+    """Base class for the ADC.
     """
 
     @property
