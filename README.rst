@@ -51,6 +51,8 @@ Installation
 * Install ``pi_waveshare_adc`` with::
 
       python3 -m pip install pi_waveshare_adc
+      # or until the next release to pypi you can get it directly from github with
+      python3 -m pip install https://github.com/matham/pi_waveshare_adc/archive/refs/heads/master.zip
 
 * Ensure the SPI interface is enabled on the RPi by running ``sudo raspi-config`` and enabling it
   in the interfaces option.
