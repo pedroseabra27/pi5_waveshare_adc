@@ -1718,7 +1718,6 @@ cdef class WiringPiADS1256(ADS1256):
             "performance and full RPi 5 support."
         )
 """
-        return res
 
 
 cdef class PiGPIOADS1256(ADS1256):
