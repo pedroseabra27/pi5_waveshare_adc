@@ -39,17 +39,17 @@ cdef:
         int spiOpen(unsigned, unsigned, unsigned)
         int spiClose(unsigned)
 
-    # lgpio declarations for RPi 5 support
-    extern from "lgpio.h" nogil:
-        int lgpioChipOpen(int gpiochip)
-        int lgpioChipClose(int handle)
-        int lgpioGpioSetMode(int handle, int gpio, int mode)
-        int lgpioGpioWrite(int handle, int gpio, int level)
-        int lgpioGpioRead(int handle, int gpio)
-        int lgpioSpiOpen(int spiDev, int spiChan, int spiBaud, int spiFlags)
-        int lgpioSpiClose(int handle)
-        int lgpioSpiWrite(int handle, char* txBuf, int count)
-        int lgpioSpiXfer(int handle, char* txBuf, char* rxBuf, int count)
+    # lgpio declarations for RPi 5 support - NOT USED, we'll use Python API
+    # extern from "lgpio.h" nogil:
+    #     int lgpioChipOpen(int gpiochip)
+    #     int lgpioChipClose(int handle)
+    #     int lgpioGpioSetMode(int handle, int gpio, int mode)
+    #     int lgpioGpioWrite(int handle, int gpio, int level)
+    #     int lgpioGpioRead(int handle, int gpio)
+    #     int lgpioSpiOpen(int spiDev, int spiChan, int spiBaud, int spiFlags)
+    #     int lgpioSpiClose(int handle)
+    #     int lgpioSpiWrite(int handle, char* txBuf, int count)
+    #     int lgpioSpiXfer(int handle, char* txBuf, char* rxBuf, int count)
 
     # WiringPi support commented out for RPi 5 compatibility  
     # extern from "wiringPiSPI.h" nogil:
@@ -1794,13 +1794,15 @@ cdef class LgpioADS1256(ADS1256):
     lgpio is the official GPIO library from Raspberry Pi Foundation.
     """
 
-    cdef int _gpio_handle
-    cdef int _spi_handle
+    cdef object _lgpio_handle
+    cdef object _spi_handle
+    cdef object _lgpio
 
     def __init__(self, **kwargs):
         super(LgpioADS1256, self).__init__(**kwargs)
-        self._gpio_handle = -1
-        self._spi_handle = -1
+        self._lgpio_handle = None
+        self._spi_handle = None
+        self._lgpio = None
 
     def __enter__(self):
         self._init()
@@ -1810,39 +1812,47 @@ cdef class LgpioADS1256(ADS1256):
         self.release_adc()
 
     cdef object _init(self):
+        # Import lgpio module
+        import lgpio
+        self._lgpio = lgpio
+        
         # Open GPIO chip 0 (main GPIO chip on RPi)
-        self._gpio_handle = lgpioChipOpen(0)
-        if self._gpio_handle < 0:
+        self._lgpio_handle = self._lgpio.gpiochip_open(0)
+        if self._lgpio_handle < 0:
             raise IOError("ERROR: Could not open GPIO chip 0")
 
         # Set pin modes
-        if lgpioGpioSetMode(self._gpio_handle, self.data_ready_pin, 0) < 0:  # INPUT
-            raise IOError(f"ERROR: Could not set pin {self.data_ready_pin} as input")
-        
-        if lgpioGpioSetMode(self._gpio_handle, self.cs_pin, 1) < 0:  # OUTPUT
-            raise IOError(f"ERROR: Could not set pin {self.cs_pin} as output")
-        
-        if lgpioGpioSetMode(self._gpio_handle, self.power_down_pin, 1) < 0:  # OUTPUT
-            raise IOError(f"ERROR: Could not set pin {self.power_down_pin} as output")
-        
-        if lgpioGpioSetMode(self._gpio_handle, self.reset_pin, 1) < 0:  # OUTPUT
-            raise IOError(f"ERROR: Could not set pin {self.reset_pin} as output")
+        try:
+            self._lgpio.gpio_claim_input(self._lgpio_handle, self.data_ready_pin)
+            self._lgpio.gpio_claim_output(self._lgpio_handle, self.cs_pin)
+            self._lgpio.gpio_claim_output(self._lgpio_handle, self.power_down_pin)
+            self._lgpio.gpio_claim_output(self._lgpio_handle, self.reset_pin)
+        except Exception as e:
+            raise IOError(f"ERROR: Could not claim GPIO pins: {e}")
 
         # Initialize pins
-        lgpioGpioWrite(self._gpio_handle, self.cs_pin, 1)  # CS high
-        lgpioGpioWrite(self._gpio_handle, self.power_down_pin, 1)  # Power up
-        lgpioGpioWrite(self._gpio_handle, self.reset_pin, 1)  # Reset high
+        self._lgpio.gpio_write(self._lgpio_handle, self.cs_pin, 1)  # CS high
+        self._lgpio.gpio_write(self._lgpio_handle, self.power_down_pin, 1)  # Power up
+        self._lgpio.gpio_write(self._lgpio_handle, self.reset_pin, 1)  # Reset high
 
         # Initialize SPI
         self._init_spi()
 
     def release_adc(self):
-        if self._spi_handle >= 0:
-            lgpioSpiClose(self._spi_handle)
-            self._spi_handle = -1
-        if self._gpio_handle >= 0:
-            lgpioChipClose(self._gpio_handle)
-            self._gpio_handle = -1
+        if self._spi_handle is not None:
+            self._lgpio.spi_close(self._spi_handle)
+            self._spi_handle = None
+        if self._lgpio_handle is not None:
+            # Free GPIO pins
+            try:
+                self._lgpio.gpio_free(self._lgpio_handle, self.data_ready_pin)
+                self._lgpio.gpio_free(self._lgpio_handle, self.cs_pin)
+                self._lgpio.gpio_free(self._lgpio_handle, self.power_down_pin)
+                self._lgpio.gpio_free(self._lgpio_handle, self.reset_pin)
+            except:
+                pass
+            self._lgpio.gpiochip_close(self._lgpio_handle)
+            self._lgpio_handle = None
 
     cdef object _init_spi(self):
         cdef unsigned char mode = 0
@@ -1852,19 +1862,42 @@ cdef class LgpioADS1256(ADS1256):
             mode |= 0x02
 
         # Open SPI device
-        self._spi_handle = lgpioSpiOpen(0, self.spi_channel, self.spi_frequency, mode)
+        self._spi_handle = self._lgpio.spi_open(0, self.spi_channel, self.spi_frequency, mode)
 
         if self._spi_handle < 0:
             raise IOError("ERROR: Could not access SPI device")
 
     cdef int _write_read_spi(self, unsigned char *tx_buf, unsigned char *rx_buf, unsigned count) nogil:
-        return lgpioSpiXfer(self._spi_handle, <char *>tx_buf, <char *>rx_buf, count)
+        # We need to use the GIL for Python API calls
+        with gil:
+            # Convert C arrays to Python bytes
+            tx_data = tx_buf[:count]
+            
+            # Perform SPI transfer
+            try:
+                rx_data = self._lgpio.spi_xfer(self._spi_handle, tx_data)
+                
+                # Copy result back to rx_buf
+                for i in range(min(count, len(rx_data))):
+                    rx_buf[i] = rx_data[i]
+                    
+                return 0  # Success
+            except Exception:
+                return -1  # Error
 
     cdef inline int _gpio_read(self, int pin) nogil:
-        return lgpioGpioRead(self._gpio_handle, pin)
+        with gil:
+            try:
+                return self._lgpio.gpio_read(self._lgpio_handle, pin)
+            except Exception:
+                return -1
 
     cdef inline void _gpio_write(self, int pin, int value) nogil:
-        lgpioGpioWrite(self._gpio_handle, pin, value)
+        with gil:
+            try:
+                self._lgpio.gpio_write(self._lgpio_handle, pin, value)
+            except Exception:
+                pass
 
     cdef inline void _cs_high(self) nogil:
         self._gpio_write(self.cs_pin, 1)

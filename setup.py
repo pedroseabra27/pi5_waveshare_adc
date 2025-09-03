@@ -14,7 +14,7 @@ with open(join(here, 'README.rst'), encoding='utf-8') as f:
     long_description = f.read()
 
 cmdclass = {'build_ext': build_ext}
-libraries = ['pigpio', 'lgpio']
+libraries = ['pigpio']
 ext_modules = [
     Extension(
         'pi5_waveshare_adc._adc',
