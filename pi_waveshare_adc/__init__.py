@@ -5,7 +5,7 @@ A performant Python library to read the RPi Waveshare ADC expansion board.
 """
 
 from ._version import __version__
-from pi_waveshare_adc._adc import Register, RegisterStatus, \
+from pi5_waveshare_adc._adc import Register, RegisterStatus, \
     AnalogInput, Gain, CurrentSource, ClockOutput, SamplingRate, SPICommand, \
     ADS1256, PiGPIOADS1256
 

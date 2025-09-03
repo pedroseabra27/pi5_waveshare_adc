@@ -17,7 +17,7 @@ cmdclass = {'build_ext': build_ext}
 libraries = ['pigpio']
 ext_modules = [
     Extension(
-        'pi_waveshare_adc._adc',
+        'pi5_waveshare_adc._adc',
         sources=[join(here, 'pi_waveshare_adc', '_adc.pyx')],
         libraries=libraries),
 ]
@@ -28,7 +28,7 @@ for e in ext_modules:
 URL = 'https://github.com/matham/pi_waveshare_adc'
 
 setup(
-    name='pi_waveshare_adc',
+    name='pi5_waveshare_adc',
     version=__version__,
     author='Matthew Einhorn',
     author_email='moiein2000@gmail.com',
