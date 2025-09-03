@@ -39,14 +39,15 @@ cdef:
         int spiOpen(unsigned, unsigned, unsigned)
         int spiClose(unsigned)
 
-    extern from "wiringPiSPI.h" nogil:
-        int wiringPiSPISetupMode(int, int, int)
-        int wiringPiSPIDataRW(int, unsigned char *, int)
-    extern from "wiringPi.h" nogil:
-        void pinMode(int, int)
-        void digitalWrite(int, int)
-        int digitalRead(int)
-        int wiringPiSetupPhys()
+    # WiringPi support commented out for RPi 5 compatibility  
+    # extern from "wiringPiSPI.h" nogil:
+    #     int wiringPiSPISetupMode(int, int, int)
+    #     int wiringPiSPIDataRW(int, unsigned char *, int)
+    # extern from "wiringPi.h" nogil:
+    #     void pinMode(int, int)
+    #     void digitalWrite(int, int)
+    #     int digitalRead(int)
+    #     int wiringPiSetupPhys()
 
 
 DEF MMAP_SHUTDOWN_INDEX = 0
@@ -1699,54 +1700,24 @@ cdef class ADS1256:
         return 0
 
 
+# WiringPi backend commented out for RPi 5 compatibility
+# Use PiGPIOADS1256 instead which offers better performance
+"""
 cdef class WiringPiADS1256(ADS1256):
-    """WiringPi backend.
-    """
+    '''WiringPi backend - DISABLED for RPi 5 compatibility.
+    
+    This backend has been disabled because WiringPi is not fully compatible
+    with Raspberry Pi 5. Please use PiGPIOADS1256 instead, which offers
+    better performance and full RPi 5 support.
+    '''
 
-    def __init__(
-            self, cs_pin=15, data_ready_pin=11, reset_pin=12, power_down_pin=13,
-            **kwargs):
-        super().__init__(
-            cs_pin=cs_pin, data_ready_pin=data_ready_pin, reset_pin=reset_pin,
-            power_down_pin=power_down_pin, **kwargs)
-
-    cdef void _set_pin_direction(
-            self, unsigned char pin, unsigned char output) nogil:
-        pinMode(pin, output)
-
-    cdef void _write_pin(self, unsigned char pin, unsigned char value) nogil:
-        digitalWrite(pin, value)
-
-    cdef unsigned char _read_pin(self, unsigned char pin) nogil:
-        return digitalRead(pin)
-
-    cdef object _init(self):
-        # Set up the wiringpi object to use physical pin numbers
-        wiringPiSetupPhys()
-
-    def release_adc(self):
-        if self._shared_memory is not None:
-            raise TypeError(
-                'Cannot release adc during sampling. Stop sampling first')
-
-    cdef object _init_spi(self):
-        # Initialize the wiringpi SPI setup. Return value is the Linux file
-        # descriptor for the SPI bus device:
-        cdef unsigned char mode = 0
-        if self._spi_mode_CPHA:
-            mode |= 0x01
-        if self._spi_mode_CPOL:
-            mode |= 0x02
-
-        fd = wiringPiSPISetupMode(self.spi_channel, self.spi_frequency, mode)
-        if fd == -1:
-            raise IOError("ERROR: Could not access SPI device file")
-
-    cdef int _write_read_spi(
-            self, unsigned char *tx_buf, unsigned char *rx_buf,
-            unsigned count) nogil:
-        cdef int res = wiringPiSPIDataRW(self.spi_channel, tx_buf, count)
-        memcpy(rx_buf, tx_buf, count)
+    def __init__(self, *args, **kwargs):
+        raise NotImplementedError(
+            "WiringPi backend is disabled for RPi 5 compatibility. "
+            "Please use PiGPIOADS1256 instead, which offers better "
+            "performance and full RPi 5 support."
+        )
+"""
         return res
 
 
