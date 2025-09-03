@@ -39,6 +39,18 @@ cdef:
         int spiOpen(unsigned, unsigned, unsigned)
         int spiClose(unsigned)
 
+    # lgpio declarations for RPi 5 support
+    extern from "lgpio.h" nogil:
+        int lgpioChipOpen(int gpiochip)
+        int lgpioChipClose(int handle)
+        int lgpioGpioSetMode(int handle, int gpio, int mode)
+        int lgpioGpioWrite(int handle, int gpio, int level)
+        int lgpioGpioRead(int handle, int gpio)
+        int lgpioSpiOpen(int spiDev, int spiChan, int spiBaud, int spiFlags)
+        int lgpioSpiClose(int handle)
+        int lgpioSpiWrite(int handle, char* txBuf, int count)
+        int lgpioSpiXfer(int handle, char* txBuf, char* rxBuf, int count)
+
     # WiringPi support commented out for RPi 5 compatibility  
     # extern from "wiringPiSPI.h" nogil:
     #     int wiringPiSPISetupMode(int, int, int)
@@ -1772,3 +1784,90 @@ cdef class PiGPIOADS1256(ADS1256):
 
     cdef int _write_read_spi(self, unsigned char *tx_buf, unsigned char *rx_buf, unsigned count) nogil:
         return spiXfer(self._spi_handle, <char *>tx_buf, <char *>rx_buf, count)
+
+
+cdef class LgpioADS1256(ADS1256):
+    """lgpio backend for Raspberry Pi 5 support.
+    
+    This backend uses the modern lgpio library which provides
+    full compatibility with Raspberry Pi 5 and future models.
+    lgpio is the official GPIO library from Raspberry Pi Foundation.
+    """
+
+    cdef int _gpio_handle
+    cdef int _spi_handle
+
+    def __init__(self, **kwargs):
+        super(LgpioADS1256, self).__init__(**kwargs)
+        self._gpio_handle = -1
+        self._spi_handle = -1
+
+    def __enter__(self):
+        self._init()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.release_adc()
+
+    cdef object _init(self):
+        # Open GPIO chip 0 (main GPIO chip on RPi)
+        self._gpio_handle = lgpioChipOpen(0)
+        if self._gpio_handle < 0:
+            raise IOError("ERROR: Could not open GPIO chip 0")
+
+        # Set pin modes
+        if lgpioGpioSetMode(self._gpio_handle, self.data_ready_pin, 0) < 0:  # INPUT
+            raise IOError(f"ERROR: Could not set pin {self.data_ready_pin} as input")
+        
+        if lgpioGpioSetMode(self._gpio_handle, self.cs_pin, 1) < 0:  # OUTPUT
+            raise IOError(f"ERROR: Could not set pin {self.cs_pin} as output")
+        
+        if lgpioGpioSetMode(self._gpio_handle, self.power_down_pin, 1) < 0:  # OUTPUT
+            raise IOError(f"ERROR: Could not set pin {self.power_down_pin} as output")
+        
+        if lgpioGpioSetMode(self._gpio_handle, self.reset_pin, 1) < 0:  # OUTPUT
+            raise IOError(f"ERROR: Could not set pin {self.reset_pin} as output")
+
+        # Initialize pins
+        lgpioGpioWrite(self._gpio_handle, self.cs_pin, 1)  # CS high
+        lgpioGpioWrite(self._gpio_handle, self.power_down_pin, 1)  # Power up
+        lgpioGpioWrite(self._gpio_handle, self.reset_pin, 1)  # Reset high
+
+        # Initialize SPI
+        self._init_spi()
+
+    def release_adc(self):
+        if self._spi_handle >= 0:
+            lgpioSpiClose(self._spi_handle)
+            self._spi_handle = -1
+        if self._gpio_handle >= 0:
+            lgpioChipClose(self._gpio_handle)
+            self._gpio_handle = -1
+
+    cdef object _init_spi(self):
+        cdef unsigned char mode = 0
+        if self._spi_mode_CPHA:
+            mode |= 0x01
+        if self._spi_mode_CPOL:
+            mode |= 0x02
+
+        # Open SPI device
+        self._spi_handle = lgpioSpiOpen(0, self.spi_channel, self.spi_frequency, mode)
+
+        if self._spi_handle < 0:
+            raise IOError("ERROR: Could not access SPI device")
+
+    cdef int _write_read_spi(self, unsigned char *tx_buf, unsigned char *rx_buf, unsigned count) nogil:
+        return lgpioSpiXfer(self._spi_handle, <char *>tx_buf, <char *>rx_buf, count)
+
+    cdef inline int _gpio_read(self, int pin) nogil:
+        return lgpioGpioRead(self._gpio_handle, pin)
+
+    cdef inline void _gpio_write(self, int pin, int value) nogil:
+        lgpioGpioWrite(self._gpio_handle, pin, value)
+
+    cdef inline void _cs_high(self) nogil:
+        self._gpio_write(self.cs_pin, 1)
+
+    cdef inline void _cs_low(self) nogil:
+        self._gpio_write(self.cs_pin, 0)
