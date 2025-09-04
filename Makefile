@@ -29,9 +29,15 @@ install:
 run: $(TARGET)
 	@echo "🚀 Executando ADC Engine..."
 	./$(TARGET)
+	@echo "🔧 Compilando ADC Engine Simplificado..."
 
 debug: $(SOURCE)
 	@echo "🐛 Compilando versão debug..."
+adc_engine: adc_engine_simple.c
+	$(CC) $(CFLAGS) -o adc_engine adc_engine_simple.c $(LDFLAGS)
+
+adc_engine_multi: adc_engine_multi.c
+	$(CC) $(CFLAGS) -o adc_engine_multi adc_engine_multi.c $(LDFLAGS)
 	$(CC) $(CFLAGS) -DDEBUG -g -o $(TARGET)_debug $(SOURCE) $(LDFLAGS)
 	@echo "✅ Debug compilado!"
 

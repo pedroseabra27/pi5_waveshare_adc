@@ -22,7 +22,7 @@ import subprocess
 import threading
 
 class HighSpeedWebInterface:
-    def __init__(self, display_rate: int = 25, window_seconds: int = 8, auto_start: bool = True):
+    def __init__(self, display_rate: int = 25, window_seconds: int = 10, auto_start: bool = True):
         """Inicializa a interface.
 
         Args:
@@ -34,27 +34,23 @@ class HighSpeedWebInterface:
         self.display_rate = display_rate
         self.window_seconds = window_seconds
         self.running = True
-
-        # Shared memory (iremos detectar layout depois; mapeamos 1MB para segurança)
-        self.shm_name = "/adc_data"
-        self.buffer_size = 10000
-        self.sample_size = 24  # double + double + int (8+8+4) + possível padding
-        self.shm_size = 1024 * 1024  # 1MB
+        # Shared memory multi-channel
+        self.shm_name = "/adc_data"  # mesmo nome usado pelo novo engine multi
+        self.header_size = 64  # conforme adc_engine_multi.c
+        self.shm_size = 0
+        self.buffer_size = 0      # será detectado
+        self.channel_count = 0    # será detectado
+        self.timestamps = None
+        self.last_index = -1
+        # Buffers visuais
+        self.time_window = deque(maxlen=self.window_seconds * 1000)
+        self.channel_windows = []
         self.header_parsed = False
-        self.header_size = 0
-
-        # Buffers de visualização
-        self.time_buffer = deque(maxlen=self.window_seconds * 1000)
-        self.voltage_buffer = deque(maxlen=self.window_seconds * 1000)
 
         # Estatísticas runtime
         self.stats = {
-            'total_samples': 0,
+            'total_cycles': 0,
             'actual_rate': 0.0,
-            'current_voltage': 0.0,
-            'voltage_min': 0.0,
-            'voltage_max': 0.0,
-            'voltage_std': 0.0,
             'c_engine_status': 'Desconectado'
         }
 
@@ -63,7 +59,7 @@ class HighSpeedWebInterface:
         self.shm_data = None
         self.last_read_index = 0
 
-        # Processo do engine (se iniciado pela UI)
+        # Processo do engine
         self.c_engine_process = None
         self.auto_start = auto_start
 
@@ -74,13 +70,26 @@ class HighSpeedWebInterface:
     def start_c_engine(self):
         """Iniciar o engine C em background."""
         try:
-            print("🚀 Iniciando C Engine...")
-            self.c_engine_process = subprocess.Popen(
-                ['./adc_engine'],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                preexec_fn=os.setsid  # Para poder matar o grupo
-            )
+            print("🚀 Iniciando C Engine Multi (adc_engine_multi)...")
+            binary_candidates = ['./adc_engine_multi', './adc_engine']
+            proc = None
+            for bin_path in binary_candidates:
+                if os.path.exists(bin_path):
+                    try:
+                        proc = subprocess.Popen(
+                            [bin_path],
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            preexec_fn=os.setsid
+                        )
+                        self.engine_binary = bin_path
+                        break
+                    except Exception:
+                        continue
+            if proc is None:
+                print("❌ Nenhum binário de engine encontrado (compile com: make adc_engine_multi)")
+                return False
+            self.c_engine_process = proc
             
             # Aguardar um pouco para o engine inicializar
             time.sleep(2)
@@ -135,111 +144,76 @@ class HighSpeedWebInterface:
                 time.sleep(delay)
         return False
     
-    def read_samples_from_shm(self):
-        """Ler novas amostras do shared memory."""
+    def read_new_cycles(self):
+        """Lê novos ciclos multi-canal do layout: header(64)+timestamps[Double]+channels[channel][buffer] (float32)."""
         if not self.shm_data:
-            return []
-        
+            return 0
         try:
-            # Header layout (C struct shared_buffer):
-            # int write_index; int read_index; int total_samples; double actual_rate; int running; (possible padding)
             self.shm_data.seek(0)
-            raw_header = self.shm_data.read(32)  # read enough for header + padding
-            if len(raw_header) < 28:  # minimal expected
-                return []
-            # Try unpack without padding first (28 bytes -> align to 8 = 32)
-            try:
-                write_index, read_index, total_samples = struct.unpack('iii', raw_header[0:12])
-                actual_rate = struct.unpack('d', raw_header[16:24]) if (len(raw_header) >= 24) else (0.0,)
-                actual_rate = actual_rate[0]
-                running = struct.unpack('i', raw_header[24:28])[0]
-                if not self.header_parsed:
-                    # Header ends at 28, align to 8 for start of samples => 32
-                    self.header_size = 32
-                    # Derivar buffer_size dinamicamente pelo tamanho real
-                    possible_samples = (self.shm_size - self.header_size) // self.sample_size
-                    if possible_samples > 0:
-                        if possible_samples != self.buffer_size:
-                            print(f"ℹ️  Ajustando buffer_size de {self.buffer_size} para {possible_samples}")
-                        self.buffer_size = possible_samples
-                    self.header_parsed = True
-            except Exception:
-                return []
-            
-            # Atualizar estatísticas
-            self.stats['total_samples'] = total_samples
+            header = self.shm_data.read(self.header_size)
+            if len(header) < 32:
+                return 0
+            write_index, total_cycles, channel_count = struct.unpack('iii', header[0:12])
+            # double está alinhado a 8 bytes -> começa em offset 16 (há 4 bytes de padding entre channel_count e double)
+            actual_rate = struct.unpack('d', header[16:24])[0]
+            running = struct.unpack('i', header[24:28])[0]
+            if not self.header_parsed:
+                self.channel_count = channel_count
+                # Derivar buffer_size: (tamanho_total - header) = 8*B + C*(4*B)
+                body = self.shm_size - self.header_size
+                # body = 8B + 4C B => B = body / (8 + 4C)
+                if channel_count > 0:
+                    self.buffer_size = body // (8 + 4*channel_count)
+                else:
+                    return 0
+                print(f"ℹ️  Detectado channel_count={self.channel_count} buffer_size={self.buffer_size}")
+                # Criar deques
+                self.channel_windows = [deque(maxlen=self.window_seconds*1000) for _ in range(self.channel_count)]
+                self.header_parsed = True
+            self.stats['total_cycles'] = total_cycles
             self.stats['actual_rate'] = actual_rate
-            
-            # Calcular quantas amostras novas temos
-            if write_index != self.last_read_index:
-                new_samples = []
-                
-                # Ler amostras novas (circular buffer)
-                current_idx = self.last_read_index
-                while current_idx != write_index:
-                    # Calcular offset no buffer
-                    offset = self.header_size + (current_idx * self.sample_size)
-                    self.shm_data.seek(offset)
-                    
-                    # Ler uma amostra (timestamp, voltage, sample_id)
-                    sample_blob = self.shm_data.read(self.sample_size)
-                    # Precisamos só dos primeiros 20 bytes (double+double+int); últimos 4 são padding
-                    if len(sample_blob) < 20:
-                        break
-                    try:
-                        sample_data = struct.unpack('ddi', sample_blob[:20])
-                    except struct.error as e:
-                        # Falha de leitura isolada, aborta loop para próxima iteração
-                        break
-                    timestamp, voltage, sample_id = sample_data
-                    
-                    new_samples.append((timestamp, voltage))
-                    
-                    # Próximo índice (circular)
-                    current_idx = (current_idx + 1) % self.buffer_size
-                
-                self.last_read_index = write_index
-                return new_samples
-            
-            return []
-            
+            if write_index == self.last_index:
+                return 0
+            # Calcular quantos novos (circular)
+            new_count = (write_index - self.last_index) % self.buffer_size if self.last_index >=0 else min(write_index+1, self.buffer_size)
+            # Mapear arrays diretamente para leitura rápida
+            # timestamps
+            ts_offset = self.header_size
+            ch_offset = ts_offset + self.buffer_size * 8
+            # Ler timestamps novos
+            for i in range(new_count):
+                idx = ( (self.last_index + 1) + i) % self.buffer_size
+                # timestamp
+                pos_ts = ts_offset + idx*8
+                self.shm_data.seek(pos_ts)
+                t_bytes = self.shm_data.read(8)
+                if len(t_bytes)<8: break
+                (ts_val,) = struct.unpack('d', t_bytes)
+                self.time_window.append(ts_val)
+                # cada canal
+                for c in range(self.channel_count):
+                    pos_ch = ch_offset + c * (self.buffer_size*4) + idx*4
+                    self.shm_data.seek(pos_ch)
+                    v_bytes = self.shm_data.read(4)
+                    if len(v_bytes)<4: break
+                    (v_float,) = struct.unpack('f', v_bytes)
+                    self.channel_windows[c].append(v_float)
+            self.last_index = write_index
+            return new_count
         except Exception as e:
-            print(f"❌ Erro ao ler shared memory: {e}")
-            return []
+            print(f"❌ Erro leitura multi-channel: {e}")
+            return 0
     
     def update_buffers(self):
-        """Atualizar buffers com dados do C engine."""
-        new_samples = self.read_samples_from_shm()
-        
-        if new_samples:
-            # Adicionar novas amostras aos buffers
-            for timestamp, voltage in new_samples:
-                self.time_buffer.append(timestamp)
-                self.voltage_buffer.append(voltage)
-                self.stats['current_voltage'] = voltage
-            
-            # Calcular estatísticas se temos dados suficientes
-            if len(self.voltage_buffer) > 10:
-                voltages = np.array(list(self.voltage_buffer)[-1000:])  # Últimas 1000
-                self.stats['voltage_min'] = voltages.min()
-                self.stats['voltage_max'] = voltages.max()
-                self.stats['voltage_std'] = voltages.std()
+        self.read_new_cycles()
     
     def get_plot_data(self):
-        """Obter dados para o gráfico."""
-        if len(self.time_buffer) < 10:
+        if len(self.time_window) < 5 or self.channel_count == 0:
             return [], [], self.stats
-        
-        # Converter para arrays numpy
-        time_array = np.array(list(self.time_buffer))
-        voltage_array = np.array(list(self.voltage_buffer))
-        
-        # Tempo relativo em segundos
-        if len(time_array) > 0:
-            time_rel = time_array - time_array[0]
-            return time_rel.tolist(), voltage_array.tolist(), self.stats
-        
-        return [], [], self.stats
+        t = np.array(self.time_window)
+        t_rel = t - t[0]
+        channels = [np.array(ch) for ch in self.channel_windows]
+        return t_rel, channels, self.stats
     
     def cleanup(self):
         """Limpar recursos."""
@@ -321,36 +295,39 @@ app.layout = html.Div([
 )
 def update_graph(n):
     interface.update_buffers()
-    time_data, voltage_data, stats = interface.get_plot_data()
-    
-    if not time_data:
+    time_rel, channels, stats = interface.get_plot_data()
+    if len(time_rel) == 0:
         return go.Figure()
-    
-    # Criar gráfico otimizado
     fig = go.Figure()
-    
-    fig.add_trace(go.Scattergl(  # Scattergl para melhor performance
-        x=time_data,
-        y=voltage_data,
-        mode='lines',
-        name='ADC Signal',
-        line=dict(color='#00D9FF', width=1),
-        hovertemplate='Tempo: %{x:.3f}s<br>Tensão: %{y:.6f}V<extra></extra>'
-    ))
-    
+    offset = 0.0
+    spacing = 1.2  # volts de separação visual
+    colors = ['#00D9FF','#FF6B35','#F9C74F','#90BE6D','#F94144','#577590','#A23B72','#4D908E']
+    for idx,ch in enumerate(channels):
+        if len(ch)==0: continue
+        base = np.array(ch)
+        y = base + offset
+        fig.add_trace(go.Scattergl(
+            x=time_rel,
+            y=y,
+            mode='lines',
+            name=f'CH{idx}',
+            line=dict(width=1,color=colors[idx % len(colors)]),
+            customdata=base,
+            hovertemplate='Canal %d'<f'{idx}'+'<br>t=%{x:.3f}s<br>V=%{customdata:.4f}V<extra></extra>'
+        ))
+        offset += spacing
     fig.update_layout(
-        title=f'🚀 Sinal em Tempo Real - {stats["actual_rate"]:.0f} Hz (C Engine)',
-        xaxis_title='Tempo (segundos)',
-        yaxis_title='Tensão (Volts)',
+        title=f'🧠 Multicanal {interface.channel_count}ch @ {stats["actual_rate"]:.0f} Hz',
+        xaxis_title='Tempo (s)',
+        yaxis_title='Canais (offset)',
         plot_bgcolor='#0F0F0F',
         paper_bgcolor='#1A1A1A',
         font=dict(color='white', size=12),
-        xaxis=dict(gridcolor='#333', gridwidth=1),
-        yaxis=dict(gridcolor='#333', gridwidth=1),
-        hovermode='x unified',
-        margin=dict(l=50, r=50, t=60, b=50)
+        xaxis=dict(gridcolor='#333'),
+        yaxis=dict(gridcolor='#333'),
+        showlegend=True,
+        margin=dict(l=50, r=40, t=50, b=40)
     )
-    
     return fig
 
 # Callback para estatísticas
@@ -362,15 +339,11 @@ def update_stats(n):
     stats = interface.stats
     
     return [
-        html.P(f"🚀 Taxa C Engine: {stats['actual_rate']:.1f} Hz", 
-               style={'margin': '3px', 'color': '#00FF00' if stats['actual_rate'] > 900 else '#FFAA00'}),
-        html.P(f"📈 Total Amostras: {stats['total_samples']:,}", style={'margin': '3px'}),
-        html.P(f"⚡ Tensão Atual: {stats['current_voltage']:+.6f}V", style={'margin': '3px'}),
-        html.P(f"📊 Buffer Python: {len(interface.voltage_buffer)} amostras", style={'margin': '3px'}),
-        html.Hr(style={'margin': '8px 0'}),
-        html.P(f"📏 Min: {stats['voltage_min']:+.6f}V", style={'margin': '3px'}),
-        html.P(f"📏 Max: {stats['voltage_max']:+.6f}V", style={'margin': '3px'}),
-        html.P(f"📊 Desvio: {stats['voltage_std']:.6f}V", style={'margin': '3px'})
+     html.P(f"🚀 Taxa C Engine: {stats['actual_rate']:.1f} Hz", 
+         style={'margin': '3px', 'color': '#00FF00' if stats['actual_rate'] > 900 else '#FFAA00'}),
+     html.P(f"📈 Total Ciclos: {stats['total_cycles']:,}", style={'margin': '3px'}),
+     html.P(f"🧪 Canais: {interface.channel_count}", style={'margin': '3px'}),
+     html.P(f"🪟 Janela Python: {len(interface.time_window)} amostras", style={'margin': '3px'}),
     ]
 
 # Callback para status do sistema
@@ -387,8 +360,8 @@ def update_system_status(n):
         html.P(f"💾 Shared Memory: {interface.shm_name}", style={'margin': '3px'}),
         html.P(f"📺 Interface: {interface.display_rate} Hz", style={'margin': '3px'}),
         html.P(f"🪟 Janela: {interface.window_seconds}s", style={'margin': '3px'}),
-        html.P(f"🎯 Buffer Size: {interface.buffer_size:,}", style={'margin': '3px'}),
-        html.P(f"📊 Resolução: 298 nanovolts", style={'margin': '3px'})
+    html.P(f"🎯 Buffer Size: {interface.buffer_size:,}", style={'margin': '3px'}),
+    html.P(f"🧠 Canais: {interface.channel_count}", style={'margin': '3px'})
     ]
 
 def main():
