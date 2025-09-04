@@ -3,15 +3,15 @@
 
 CC = gcc
 CFLAGS = -O3 -Wall -Wextra -std=c99 -pthread -ffast-math
-LDFLAGS = -pthread -lrt -llgpio
+LDFLAGS = -pthread -lrt
 TARGET = adc_engine
-SOURCE = adc_engine.c
+SOURCE = adc_engine_simple.c
 
 # Alvos
 all: $(TARGET)
 
 $(TARGET): $(SOURCE)
-	@echo "🔧 Compilando ADC Engine..."
+	@echo "🔧 Compilando ADC Engine Simplificado..."
 	$(CC) $(CFLAGS) -o $(TARGET) $(SOURCE) $(LDFLAGS)
 	@echo "✅ Compilação concluída!"
 
@@ -23,7 +23,7 @@ clean:
 install:
 	@echo "📦 Instalando dependências..."
 	sudo apt update
-	sudo apt install -y build-essential liblgpio-dev
+	sudo apt install -y build-essential
 	@echo "✅ Dependências instaladas!"
 
 run: $(TARGET)

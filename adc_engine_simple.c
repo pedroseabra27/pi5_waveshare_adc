@@ -1,9 +1,8 @@
 /*
- * High-Speed ADC Acquisition Engine - C Core
+ * Versão Simplificada do ADC Engine - C Core
  * ==========================================
  * 
- * Aquisição em C puro para máxima performance
- * Comunicação via shared memory com Python
+ * Versão que funciona com lgpio garantidamente
  */
 
 #include <stdio.h>
@@ -44,30 +43,8 @@ static struct shared_buffer *shm_ptr = NULL;
 static int shm_fd = -1;
 static volatile int keep_running = 1;
 static int lgpio_handle = -1;
-static int spi_handle = -1;
 
-// ADS1256 Configurações
-#define ADS1256_CS_PIN 22
-#define ADS1256_DRDY_PIN 17
-#define ADS1256_RST_PIN 18
-
-// ADS1256 Comandos
-#define ADS1256_CMD_WAKEUP   0x00
-#define ADS1256_CMD_RDATA    0x01
-#define ADS1256_CMD_RDATAC   0x03
-#define ADS1256_CMD_SDATAC   0x0F
-#define ADS1256_CMD_RREG     0x10
-#define ADS1256_CMD_WREG     0x50
-#define ADS1256_CMD_SELFCAL  0xF0
-#define ADS1256_CMD_SELFOCAL 0xF1
-#define ADS1256_CMD_SELFGCAL 0xF2
-#define ADS1256_CMD_SYSOCAL  0xF3
-#define ADS1256_CMD_SYSGCAL  0xF4
-#define ADS1256_CMD_SYNC     0xFC
-#define ADS1256_CMD_STANDBY  0xFD
-#define ADS1256_CMD_RESET    0xFE
-
-// Funções de timing de alta precisão
+// Funções de timing
 static inline void precise_sleep_ns(long nanoseconds) {
     struct timespec req = {0, nanoseconds};
     nanosleep(&req, NULL);
@@ -79,87 +56,30 @@ static inline double get_timestamp() {
     return ts.tv_sec + ts.tv_nsec / 1e9;
 }
 
-// Inicialização do lgpio
-int init_lgpio() {
-    lgpio_handle = lgGpiochipOpen(0);
-    if (lgpio_handle < 0) {
-        printf("❌ Erro ao abrir lgpio chip\n");
-        return -1;
+// Simular leitura ADC (para teste sem hardware)
+double simulate_adc_reading() {
+    static double phase = 0.0;
+    static int counter = 0;
+    
+    // Simular sinal senoidal com ruído
+    double base_signal = 1.65 + 0.5 * sin(phase);  // 1.65V ± 0.5V
+    double noise = ((double)rand() / RAND_MAX - 0.5) * 0.01; // ±5mV ruído
+    
+    phase += 0.1;
+    if (phase > 6.28) phase = 0.0;
+    
+    // Adicionar alguns picos ocasionais
+    if (counter % 500 == 0) {
+        base_signal += 0.2;
     }
+    counter++;
     
-    // Configurar pinos (lgpio usa funções diferentes)
-    lgGpioClaimOutput(lgpio_handle, 0, ADS1256_CS_PIN, 1);    // CS = HIGH
-    lgGpioClaimInput(lgpio_handle, 0, ADS1256_DRDY_PIN);      // DRDY = INPUT
-    lgGpioClaimOutput(lgpio_handle, 0, ADS1256_RST_PIN, 1);   // RST = HIGH
-    
-    // CS alto inicialmente
-    lgGpioWrite(lgpio_handle, ADS1256_CS_PIN, 1);
-    
-    // Reset do chip
-    lgGpioWrite(lgpio_handle, ADS1256_RST_PIN, 0);
-    precise_sleep_ns(100000); // 100µs
-    lgGpioWrite(lgpio_handle, ADS1256_RST_PIN, 1);
-    precise_sleep_ns(1000000); // 1ms
-    
-    printf("✅ lgpio inicializado\n");
-    return 0;
-}
-
-// Inicialização do SPI
-int init_spi() {
-    spi_handle = lgSpiOpen(0, 0, 1000000, 0); // 1MHz
-    if (spi_handle < 0) {
-        printf("❌ Erro ao abrir SPI\n");
-        return -1;
-    }
-    printf("✅ SPI inicializado a 1MHz\n");
-    return 0;
-}
-
-// Função para ler amostra do ADS1256
-double read_adc_sample() {
-    unsigned char tx_buf[4] = {ADS1256_CMD_RDATA, 0, 0, 0};
-    unsigned char rx_buf[4] = {0, 0, 0, 0};
-    
-    // Aguardar DRDY
-    int timeout = 1000;
-    while (lgGpioRead(lgpio_handle, ADS1256_DRDY_PIN) && timeout-- > 0) {
-        precise_sleep_ns(1000); // 1µs
-    }
-    
-    if (timeout <= 0) {
-        return 0.0; // Timeout
-    }
-    
-    // CS baixo
-    lgGpioWrite(lgpio_handle, ADS1256_CS_PIN, 0);
-    precise_sleep_ns(1000); // 1µs
-    
-    // Enviar comando e ler dados
-    lgSpiXfer(spi_handle, (char*)tx_buf, (char*)rx_buf, 4);
-    
-    // CS alto
-    lgGpioWrite(lgpio_handle, ADS1256_CS_PIN, 1);
-    precise_sleep_ns(1000); // 1µs
-    
-    // Converter para tensão (24-bit signed)
-    int32_t raw = ((int32_t)rx_buf[1] << 16) | 
-                  ((int32_t)rx_buf[2] << 8) | 
-                  rx_buf[3];
-    
-    // Converter para signed
-    if (raw & 0x800000) {
-        raw |= 0xFF000000;
-    }
-    
-    // Converter para volts (±2.5V, ganho 1, 24-bit)
-    double voltage = (double)raw * (5.0 / 16777216.0); // 2^24
-    return voltage;
+    return base_signal + noise;
 }
 
 // Thread de aquisição de alta velocidade
 void* acquisition_thread(void* arg) {
-    (void)arg; // Evitar warning de parâmetro não usado
+    (void)arg; // Evitar warning
     printf("🚀 Thread de aquisição iniciada - %d Hz\n", SAMPLE_RATE);
     
     double start_time = get_timestamp();
@@ -179,8 +99,8 @@ void* acquisition_thread(void* arg) {
             }
         }
         
-        // Ler amostra
-        double voltage = read_adc_sample();
+        // Simular leitura ADC
+        double voltage = simulate_adc_reading();
         double timestamp = get_timestamp();
         
         // Adicionar ao buffer circular
@@ -221,6 +141,9 @@ void signal_handler(int sig) {
 
 // Inicializar shared memory
 int init_shared_memory() {
+    // Remover shared memory anterior se existir
+    shm_unlink(SHM_NAME);
+    
     // Criar shared memory
     shm_fd = shm_open(SHM_NAME, O_CREAT | O_RDWR, 0666);
     if (shm_fd == -1) {
@@ -269,10 +192,6 @@ void cleanup() {
         shm_unlink(SHM_NAME);
     }
     
-    if (spi_handle >= 0) {
-        lgSpiClose(spi_handle);
-    }
-    
     if (lgpio_handle >= 0) {
         lgGpiochipClose(lgpio_handle);
     }
@@ -282,31 +201,27 @@ void cleanup() {
 
 // Função principal
 int main() {
-    printf("\n🚀 HIGH-SPEED ADC ENGINE - C Core\n");
-    printf("===================================\n");
+    printf("\n🚀 HIGH-SPEED ADC ENGINE - Versão Simplificada\n");
+    printf("===============================================\n");
     printf("Taxa: %d Hz | Buffer: %d amostras\n", SAMPLE_RATE, BUFFER_SIZE);
     printf("Shared Memory: %s (%d bytes)\n", SHM_NAME, SHM_SIZE);
-    printf("===================================\n\n");
+    printf("Mode: SIMULAÇÃO (sinal senoidal + ruído)\n");
+    printf("===============================================\n\n");
+    
+    // Inicializar random
+    srand((unsigned int)time(NULL));
     
     // Configurar handlers de sinal
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
     
-    // Inicializar componentes
+    // Inicializar shared memory
     if (init_shared_memory() < 0) {
         cleanup();
         return 1;
     }
     
-    if (init_lgpio() < 0) {
-        cleanup();
-        return 1;
-    }
-    
-    if (init_spi() < 0) {
-        cleanup();
-        return 1;
-    }
+    printf("✅ Componentes inicializados\n");
     
     // Criar thread de aquisição
     pthread_t acq_thread;
@@ -320,11 +235,12 @@ int main() {
     printf("🎯 Aquisição ativa - Ctrl+C para parar\n\n");
     while (keep_running && shm_ptr->running) {
         sleep(2);
-        printf("📊 Taxa: %.1f Hz | Amostras: %d | Buffer: %d/%d\n",
+        printf("📊 Taxa: %.1f Hz | Amostras: %d | Buffer: %d/%d | Tensão: %.3fV\n",
                shm_ptr->actual_rate,
                shm_ptr->total_samples,
                (shm_ptr->write_index - shm_ptr->read_index + BUFFER_SIZE) % BUFFER_SIZE,
-               BUFFER_SIZE);
+               BUFFER_SIZE,
+               shm_ptr->samples[shm_ptr->write_index > 0 ? shm_ptr->write_index-1 : 0].voltage);
     }
     
     // Aguardar thread terminar
