@@ -22,7 +22,7 @@ import subprocess
 import threading
 
 class HighSpeedWebInterface:
-    def __init__(self, display_rate=25, window_seconds=8):
+    def __init__(self, display_rate=25, window_seconds=8, auto_start=True):
         """
         Interface web que lê do C engine via shared memory.
         
@@ -60,8 +60,9 @@ class HighSpeedWebInterface:
         self.shm_data = None
         self.last_read_index = 0
         
-        # C Engine process
-        self.c_engine_process = None
+    # C Engine process (se iniciado por aqui)
+    self.c_engine_process = None
+    self.auto_start = auto_start
         
         print("🌐 Interface Web Híbrida Inicializada")
         print(f"📺 Taxa de atualização: {display_rate} Hz")
@@ -93,26 +94,24 @@ class HighSpeedWebInterface:
             print(f"❌ Erro ao iniciar C Engine: {e}")
             return False
     
-    def connect_shared_memory(self):
-        """Conectar ao shared memory do C engine."""
-        try:
-            # Abrir shared memory
-            self.shm_fd = os.open(self.shm_name, os.O_RDONLY)
-            
-            # Mapear memória
-            self.shm_data = mmap.mmap(
-                self.shm_fd, 
-                self.shm_size, 
-                mmap.MAP_SHARED, 
-                mmap.PROT_READ
-            )
-            
-            print("✅ Conectado ao shared memory")
-            return True
-            
-        except Exception as e:
-            print(f"❌ Erro ao conectar shared memory: {e}")
-            return False
+    def connect_shared_memory(self, retries=10, delay=0.5):
+        """Conectar ao shared memory do C engine com tentativas."""
+        for attempt in range(1, retries+1):
+            try:
+                self.shm_fd = os.open(self.shm_name, os.O_RDONLY)
+                self.shm_data = mmap.mmap(
+                    self.shm_fd, self.shm_size, mmap.MAP_SHARED, mmap.PROT_READ
+                )
+                print(f"✅ Conectado ao shared memory (tentativa {attempt})")
+                self.stats['c_engine_status'] = 'Conectado'
+                return True
+            except FileNotFoundError:
+                print(f"⏳ Shared memory não encontrado (tentativa {attempt}/{retries})")
+                time.sleep(delay)
+            except Exception as e:
+                print(f"❌ Erro ao conectar shared memory: {e}")
+                time.sleep(delay)
+        return False
     
     def read_samples_from_shm(self):
         """Ler novas amostras do shared memory."""
@@ -349,15 +348,24 @@ def main():
     signal.signal(signal.SIGTERM, signal_handler)
     
     try:
-        # 1. Iniciar C Engine
-        if not interface.start_c_engine():
-            print("❌ Falha ao iniciar C Engine")
-            return
-        
-        # 2. Conectar shared memory
-        if not interface.connect_shared_memory():
-            print("❌ Falha ao conectar shared memory")
-            return
+        # 1. Se já existe engine rodando, só anexar
+        if not interface.auto_start:
+            print("🔍 Modo anexar: tentando conectar a engine existente...")
+            if not interface.connect_shared_memory():
+                print("❌ Não foi possível conectar. Inicie ./adc_engine primeiro.")
+                return
+        else:
+            # Tentar iniciar engine própria
+            if not interface.start_c_engine():
+                print("⚠️ Não iniciou. Tentando anexar a uma existente...")
+                if not interface.connect_shared_memory():
+                    print("❌ Falha ao iniciar ou anexar.")
+                    return
+            else:
+                # Conectar após iniciar
+                if not interface.connect_shared_memory():
+                    print("❌ Falha ao conectar shared memory após start.")
+                    return
         
         print("\n🌐 ACESSO WEB:")
         print("   • Local: http://localhost:8050")
@@ -377,4 +385,7 @@ def main():
         interface.cleanup()
 
 if __name__ == "__main__":
+    # Se usuário exportar ATTACH=1, não iniciar engine
+    attach = os.environ.get("ATTACH", "0") == "1"
+    interface.auto_start = not attach
     main()
