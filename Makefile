@@ -4,6 +4,7 @@
 CC = gcc
 CFLAGS = -O3 -Wall -Wextra -std=c99 -pthread -ffast-math
 LDFLAGS = -pthread -lrt -lm
+LGPIO_LIB = -llgpio
 TARGET = adc_engine
 SOURCE = adc_engine_simple.c
 
@@ -37,7 +38,8 @@ adc_engine: adc_engine_simple.c
 	$(CC) $(CFLAGS) -o adc_engine adc_engine_simple.c $(LDFLAGS)
 
 adc_engine_multi: adc_engine_multi.c
-	$(CC) $(CFLAGS) -o adc_engine_multi adc_engine_multi.c $(LDFLAGS)
+	@echo "🔧 Compilando engine multi-canal (com lgpio)..."
+	$(CC) $(CFLAGS) -o adc_engine_multi adc_engine_multi.c $(LDFLAGS) $(LGPIO_LIB)
 	$(CC) $(CFLAGS) -DDEBUG -g -o $(TARGET)_debug $(SOURCE) $(LDFLAGS)
 	@echo "✅ Debug compilado!"
 

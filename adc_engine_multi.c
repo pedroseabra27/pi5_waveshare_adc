@@ -39,7 +39,17 @@
 #define M_PI 3.14159265358979323846
 #endif
 #include <errno.h>
-#include <lgpio.h>
+#ifdef __has_include
+# if __has_include(<lgpio.h>)
+#  include <lgpio.h>
+#  define HAVE_LGPIO 1
+# else
+#  define HAVE_LGPIO 0
+# endif
+#else
+# include <lgpio.h>
+# define HAVE_LGPIO 1
+#endif
 
 #define SHM_NAME "/adc_data"
 #define CHANNEL_COUNT 6            // solicitado
@@ -171,6 +181,9 @@ static double ads1256_raw_to_voltage(int32_t raw) {
 }
 
 static int ads1256_init() {
+#if !HAVE_LGPIO
+    return -1; // força modo simulação se não houver lgpio
+#endif
     gpio_chip = lgGpiochipOpen(0);
     if (gpio_chip < 0) {
         fprintf(stderr, "lgGpiochipOpen falhou\n");
