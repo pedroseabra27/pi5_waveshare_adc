@@ -21,7 +21,8 @@
 #define SAMPLE_RATE 1000
 #define BUFFER_SIZE 10000
 #define SHM_NAME "/adc_data"
-#define SHM_SIZE (BUFFER_SIZE * sizeof(struct sample_data))
+// Tamanho correto: estrutura completa (header + samples)
+#define SHM_SIZE (sizeof(struct shared_buffer))
 
 // Estrutura de dados compartilhados
 struct sample_data {

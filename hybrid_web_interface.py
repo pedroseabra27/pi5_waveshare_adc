@@ -34,11 +34,14 @@ class HighSpeedWebInterface:
         self.window_seconds = window_seconds
         self.running = True
         
-        # Configurações shared memory
-        self.shm_name = "/adc_data"
-        self.buffer_size = 10000
-        self.sample_size = 24  # sizeof(struct sample_data)
-        self.shm_size = self.buffer_size * self.sample_size
+    # Configurações shared memory
+    self.shm_name = "/adc_data"
+    self.buffer_size = 10000
+    self.sample_size = 24  # sizeof(struct sample_data) (double,double,int)
+    # O shared buffer tem cabeçalho antes do array; vamos inferir dinamicamente depois de mapear
+    self.shm_size = 1024*1024  # mapear até 1MB (suficiente) em leitura
+    self.header_parsed = False
+    self.header_size = 0
         
         # Buffers para interface
         self.time_buffer = deque(maxlen=8000)  # 8 segundos a 1000 Hz
@@ -63,10 +66,10 @@ class HighSpeedWebInterface:
     # C Engine process (se iniciado por aqui)
     self.c_engine_process = None
     self.auto_start = auto_start
-        
-        print("🌐 Interface Web Híbrida Inicializada")
-        print(f"📺 Taxa de atualização: {display_rate} Hz")
-        print(f"🪟 Janela: {window_seconds} segundos")
+
+    print("🌐 Interface Web Híbrida Inicializada")
+    print(f"📺 Taxa de atualização: {self.display_rate} Hz")
+    print(f"🪟 Janela: {self.window_seconds} segundos")
     
     def start_c_engine(self):
         """Iniciar o engine C em background."""
@@ -119,10 +122,20 @@ class HighSpeedWebInterface:
             return []
         
         try:
-            # Ler header do shared memory
+            # Header layout (C struct ordering):
+            # int write_index; int read_index; int total_samples; double actual_rate; int running;
+            # Depois array de samples
             self.shm_data.seek(0)
-            header = struct.unpack('iiid', self.shm_data.read(20))
-            write_index, read_index, total_samples, actual_rate = header
+            raw_header = self.shm_data.read(4*4 + 8)  # 4 ints (maybe) + double + maybe padding
+            if len(raw_header) < 24:
+                return []
+            # Desempacotar primeiros 3 ints e a seguir double e outro int
+            write_index, read_index, total_samples, = struct.unpack('iii', raw_header[:12])
+            actual_rate = struct.unpack('d', raw_header[12:20])[0]
+            running = struct.unpack('i', self.shm_data.read(4))[0]
+            if not self.header_parsed:
+                self.header_size = 12 + 8 + 4  # 24 bytes
+                self.header_parsed = True
             
             # Atualizar estatísticas
             self.stats['total_samples'] = total_samples
@@ -136,11 +149,14 @@ class HighSpeedWebInterface:
                 current_idx = self.last_read_index
                 while current_idx != write_index:
                     # Calcular offset no buffer
-                    offset = 20 + (current_idx * self.sample_size)  # 20 = header size
+                    offset = self.header_size + (current_idx * self.sample_size)
                     self.shm_data.seek(offset)
                     
                     # Ler uma amostra (timestamp, voltage, sample_id)
-                    sample_data = struct.unpack('ddi', self.shm_data.read(self.sample_size))
+                    sample_blob = self.shm_data.read(self.sample_size)
+                    if len(sample_blob) < self.sample_size:
+                        break
+                    sample_data = struct.unpack('ddi', sample_blob)
                     timestamp, voltage, sample_id = sample_data
                     
                     new_samples.append((timestamp, voltage))
