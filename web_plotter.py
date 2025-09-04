@@ -72,47 +72,64 @@ class WebPolysommographyMonitor:
         target_interval = 1.0 / self.sample_rate
         next_time = time.time()
         
+        # Pre-allocate para performance
+        samples_batch = []
+        batch_size = 10
+        
         while self.running:
             try:
-                # Controlar timing preciso
+                # Controlar timing mais agressivo
                 current_time = time.time()
                 if current_time < next_time:
-                    time.sleep(next_time - current_time)
+                    sleep_time = next_time - current_time
+                    if sleep_time > 0.0005:  # Só dormir se > 0.5ms
+                        time.sleep(sleep_time)
                 
-                # Coletar amostra
+                # Coletar amostra com menos overhead
                 sample = self.adc.read_sample_trigger()
                 voltage = sample * self.adc.v_per_digit
                 timestamp = time.time()
                 
                 self.current_voltage = voltage
+                self.total_samples += 1
                 
-                # Adicionar ao queue
-                try:
-                    self.data_queue.put_nowait((timestamp, voltage))
-                    self.total_samples += 1
-                except queue.Full:
-                    # Remove item mais antigo se queue estiver cheio
-                    try:
-                        self.data_queue.get_nowait()
-                        self.data_queue.put_nowait((timestamp, voltage))
-                    except queue.Empty:
-                        pass
+                # Batch processing para reduzir lock overhead
+                samples_batch.append((timestamp, voltage))
                 
-                # Calcular taxa real
-                if self.start_time:
-                    elapsed = time.time() - self.start_time
-                    self.actual_rate = self.total_samples / elapsed if elapsed > 0 else 0
+                if len(samples_batch) >= batch_size:
+                    # Processar batch de uma vez
+                    for ts, v in samples_batch:
+                        try:
+                            self.data_queue.put_nowait((ts, v))
+                        except queue.Full:
+                            # Remove mais itens antigos se necessário
+                            for _ in range(5):
+                                try:
+                                    self.data_queue.get_nowait()
+                                except queue.Empty:
+                                    break
+                            try:
+                                self.data_queue.put_nowait((ts, v))
+                            except queue.Full:
+                                pass
+                    samples_batch.clear()
                 
-                # Calcular próximo tempo
+                # Calcular taxa real menos frequentemente
+                if self.total_samples % 100 == 0:
+                    if self.start_time:
+                        elapsed = time.time() - self.start_time
+                        self.actual_rate = self.total_samples / elapsed if elapsed > 0 else 0
+                
+                # Calcular próximo tempo com menos overhead
                 next_time += target_interval
                 
-                # Resetar se muito atrasado
-                if current_time > next_time + 0.01:
+                # Resetar se muito atrasado (mais tolerante)
+                if current_time > next_time + 0.005:  # 5ms tolerância
                     next_time = current_time + target_interval
                     
             except Exception as e:
                 print(f"❌ Erro na coleta: {e}")
-                time.sleep(0.001)
+                time.sleep(0.0001)  # Sleep menor em caso de erro
     
     def get_latest_data(self):
         """Obter dados mais recentes para o gráfico."""
