@@ -183,9 +183,14 @@ class HighSpeedWebInterface:
                     
                     # Ler uma amostra (timestamp, voltage, sample_id)
                     sample_blob = self.shm_data.read(self.sample_size)
-                    if len(sample_blob) < self.sample_size:
+                    # Precisamos só dos primeiros 20 bytes (double+double+int); últimos 4 são padding
+                    if len(sample_blob) < 20:
                         break
-                    sample_data = struct.unpack('ddi', sample_blob)
+                    try:
+                        sample_data = struct.unpack('ddi', sample_blob[:20])
+                    except struct.error as e:
+                        # Falha de leitura isolada, aborta loop para próxima iteração
+                        break
                     timestamp, voltage, sample_id = sample_data
                     
                     new_samples.append((timestamp, voltage))
@@ -241,11 +246,20 @@ class HighSpeedWebInterface:
         print("🧹 Limpando interface...")
         self.running = False
         
-        if self.shm_data:
-            self.shm_data.close()
+        if hasattr(self, '_cleaned') and self._cleaned:
+            return
         
-        if self.shm_fd:
-            os.close(self.shm_fd)
+        try:
+            if self.shm_data:
+                self.shm_data.close()
+        except Exception:
+            pass
+        
+        try:
+            if self.shm_fd:
+                os.close(self.shm_fd)
+        except Exception:
+            pass
         
         if self.c_engine_process:
             print("🛑 Finalizando C Engine...")
@@ -256,6 +270,7 @@ class HighSpeedWebInterface:
                 pass
         
         print("✅ Cleanup concluído")
+        self._cleaned = True
 
 # Instância global
 interface = HighSpeedWebInterface()
