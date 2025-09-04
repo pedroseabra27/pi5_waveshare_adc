@@ -1,0 +1,25 @@
+# Dependências para Interface Web
+# ================================
+
+# Core web framework
+dash>=2.14.0
+plotly>=5.15.0
+
+# Dependências do Dash
+dash-core-components
+dash-html-components
+
+# Servidor web
+flask>=2.3.0
+Werkzeug>=2.3.0
+
+# Para melhor performance
+pandas>=1.5.0
+numpy>=1.24.0
+
+# Dependências existentes
+lgpio>=0.2.0.1
+Cython>=0.29.0
+
+# Opcional: para logs mais bonitos
+colorama
