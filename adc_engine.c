@@ -87,10 +87,10 @@ int init_lgpio() {
         return -1;
     }
     
-    // Configurar pinos
-    lgGpioSetMode(lgpio_handle, ADS1256_CS_PIN, LG_OUTPUT);
-    lgGpioSetMode(lgpio_handle, ADS1256_DRDY_PIN, LG_INPUT);
-    lgGpioSetMode(lgpio_handle, ADS1256_RST_PIN, LG_OUTPUT);
+    // Configurar pinos (lgpio usa valores inteiros diretos)
+    lgGpioSetMode(lgpio_handle, ADS1256_CS_PIN, 1);  // 1 = OUTPUT
+    lgGpioSetMode(lgpio_handle, ADS1256_DRDY_PIN, 0); // 0 = INPUT  
+    lgGpioSetMode(lgpio_handle, ADS1256_RST_PIN, 1);  // 1 = OUTPUT
     
     // CS alto inicialmente
     lgGpioWrite(lgpio_handle, ADS1256_CS_PIN, 1);
@@ -159,6 +159,7 @@ double read_adc_sample() {
 
 // Thread de aquisição de alta velocidade
 void* acquisition_thread(void* arg) {
+    (void)arg; // Evitar warning de parâmetro não usado
     printf("🚀 Thread de aquisição iniciada - %d Hz\n", SAMPLE_RATE);
     
     double start_time = get_timestamp();
