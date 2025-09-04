@@ -101,7 +101,19 @@ class HighSpeedWebInterface:
         """Conectar ao shared memory do C engine com tentativas."""
         for attempt in range(1, retries+1):
             try:
-                self.shm_fd = os.open(self.shm_name, os.O_RDONLY)
+                # Caminhos possíveis: /adc_data (falha) ou /dev/shm/adc_data (correto para shm_open)
+                shm_path_candidates = [self.shm_name, f"/dev/shm{self.shm_name}"]
+                last_err = None
+                self.shm_fd = None
+                for cand in shm_path_candidates:
+                    try:
+                        self.shm_fd = os.open(cand, os.O_RDONLY)
+                        self._resolved_shm_path = cand
+                        break
+                    except OSError as e:
+                        last_err = e
+                if self.shm_fd is None:
+                    raise last_err if last_err else FileNotFoundError(self.shm_name)
                 self.shm_data = mmap.mmap(
                     self.shm_fd, self.shm_size, mmap.MAP_SHARED, mmap.PROT_READ
                 )
@@ -122,20 +134,24 @@ class HighSpeedWebInterface:
             return []
         
         try:
-            # Header layout (C struct ordering):
-            # int write_index; int read_index; int total_samples; double actual_rate; int running;
-            # Depois array de samples
+            # Header layout (C struct shared_buffer):
+            # int write_index; int read_index; int total_samples; double actual_rate; int running; (possible padding)
             self.shm_data.seek(0)
-            raw_header = self.shm_data.read(4*4 + 8)  # 4 ints (maybe) + double + maybe padding
-            if len(raw_header) < 24:
+            raw_header = self.shm_data.read(32)  # read enough for header + padding
+            if len(raw_header) < 28:  # minimal expected
                 return []
-            # Desempacotar primeiros 3 ints e a seguir double e outro int
-            write_index, read_index, total_samples, = struct.unpack('iii', raw_header[:12])
-            actual_rate = struct.unpack('d', raw_header[12:20])[0]
-            running = struct.unpack('i', self.shm_data.read(4))[0]
-            if not self.header_parsed:
-                self.header_size = 12 + 8 + 4  # 24 bytes
-                self.header_parsed = True
+            # Try unpack without padding first (28 bytes -> align to 8 = 32)
+            try:
+                write_index, read_index, total_samples = struct.unpack('iii', raw_header[0:12])
+                actual_rate = struct.unpack('d', raw_header[16:24]) if (len(raw_header) >= 24) else (0.0,)
+                actual_rate = actual_rate[0]
+                running = struct.unpack('i', raw_header[24:28])[0]
+                if not self.header_parsed:
+                    # Header ends at 28, align to 8 for start of samples => 32
+                    self.header_size = 32
+                    self.header_parsed = True
+            except Exception:
+                return []
             
             # Atualizar estatísticas
             self.stats['total_samples'] = total_samples
