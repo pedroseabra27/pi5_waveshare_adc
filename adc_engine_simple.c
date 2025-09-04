@@ -21,8 +21,11 @@
 #define SAMPLE_RATE 1000
 #define BUFFER_SIZE 10000
 #define SHM_NAME "/adc_data"
-// Tamanho correto: estrutura completa (header + samples)
-#define SHM_SIZE (sizeof(struct shared_buffer))
+// Header layout: 5 ints/double with padding to 32 bytes then samples
+// Vamos definir SHM_SIZE manualmente para evitar discrepâncias de alinhamento entre compiladores.
+#define SAMPLE_STRUCT_SIZE 24  // double + double + int (provável padding)
+#define HEADER_SIZE 32
+#define SHM_SIZE (HEADER_SIZE + (BUFFER_SIZE * SAMPLE_STRUCT_SIZE))
 
 // Estrutura de dados compartilhados
 struct sample_data {
@@ -207,6 +210,7 @@ int main() {
     printf("===============================================\n");
     printf("Taxa: %d Hz | Buffer: %d amostras\n", SAMPLE_RATE, BUFFER_SIZE);
     printf("Shared Memory: %s (%d bytes)\n", SHM_NAME, SHM_SIZE);
+    printf("Header: %d bytes | Sample size: %d bytes | Data region: %d bytes\n", HEADER_SIZE, SAMPLE_STRUCT_SIZE, SHM_SIZE - HEADER_SIZE);
     printf("Mode: SIMULAÇÃO (sinal senoidal + ruído)\n");
     printf("===============================================\n\n");
     

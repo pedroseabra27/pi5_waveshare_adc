@@ -114,9 +114,16 @@ class HighSpeedWebInterface:
                         last_err = e
                 if self.shm_fd is None:
                     raise last_err if last_err else FileNotFoundError(self.shm_name)
+                # Descobrir tamanho real do segmento (antes estava fixo em 1MB e dava erro)
+                real_size = os.fstat(self.shm_fd).st_size
+                if real_size <= 0:
+                    raise RuntimeError(f"Tamanho inválido do shared memory: {real_size}")
+                self.shm_size = real_size
+                # Mapear exatamente o tamanho existente
                 self.shm_data = mmap.mmap(
                     self.shm_fd, self.shm_size, mmap.MAP_SHARED, mmap.PROT_READ
                 )
+                print(f"ℹ️  Shared memory aberto: {self._resolved_shm_path} ({self.shm_size} bytes)")
                 print(f"✅ Conectado ao shared memory (tentativa {attempt})")
                 self.stats['c_engine_status'] = 'Conectado'
                 return True
@@ -149,6 +156,12 @@ class HighSpeedWebInterface:
                 if not self.header_parsed:
                     # Header ends at 28, align to 8 for start of samples => 32
                     self.header_size = 32
+                    # Derivar buffer_size dinamicamente pelo tamanho real
+                    possible_samples = (self.shm_size - self.header_size) // self.sample_size
+                    if possible_samples > 0:
+                        if possible_samples != self.buffer_size:
+                            print(f"ℹ️  Ajustando buffer_size de {self.buffer_size} para {possible_samples}")
+                        self.buffer_size = possible_samples
                     self.header_parsed = True
             except Exception:
                 return []
