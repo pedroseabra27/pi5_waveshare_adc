@@ -15,6 +15,7 @@
 #include <pthread.h>
 #include <signal.h>
 #include <lgpio.h>
+#include <math.h>
 
 // Configurações
 #define SAMPLE_RATE 1000

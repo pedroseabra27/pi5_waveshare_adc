@@ -3,7 +3,7 @@
 
 CC = gcc
 CFLAGS = -O3 -Wall -Wextra -std=c99 -pthread -ffast-math
-LDFLAGS = -pthread -lrt
+LDFLAGS = -pthread -lrt -lm
 TARGET = adc_engine
 SOURCE = adc_engine_simple.c
 
