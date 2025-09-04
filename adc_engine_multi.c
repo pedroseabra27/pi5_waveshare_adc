@@ -35,6 +35,9 @@
 #include <pthread.h>
 #include <signal.h>
 #include <math.h>
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 #include <errno.h>
 #include <lgpio.h>
 
@@ -50,7 +53,7 @@ struct shm_header {
     volatile int channel_count;    // 8
     volatile double actual_rate;   // 16
     volatile int running;          // 24
-    volatile int reserved[10];     // 28..(28+40)=68 -> mas alinhamento à 64
+    volatile int reserved[9];      // 28..(28+36)=64 exatamente
 };
 
 #define HEADER_SIZE 64
@@ -130,7 +133,7 @@ static int ads1256_wait_drdy(int timeout_us) {
     for (int i = 0; i < timeout_us/100; ++i) {
         int level = lgGpioRead(gpio_chip, PIN_DRDY);
         if (level == 0) return 0; // pronto
-        lgusleep(100);
+    usleep(100);
     }
     return -1; // timeout
 }
@@ -184,9 +187,9 @@ static int ads1256_init() {
 
     // Reset hardware
     lgGpioWrite(gpio_chip, PIN_RST, 0);
-    lgusleep(50*1000);
+    usleep(50*1000);
     lgGpioWrite(gpio_chip, PIN_RST, 1);
-    lgusleep(50*1000);
+    usleep(50*1000);
 
     // Config DRATE alto para permitir ler 6 canais rapidamente
     ads1256_write_register(REG_DRATE, DRATE_30000);
@@ -203,7 +206,7 @@ static int ads1256_init() {
 
 // Fallback simulation: gera senos defasados + offsets
 static double simulate_channel(int ch, double t) {
-    double base = 1.65 + 0.3 * sin(t * 2 * M_PI * 2 + ch * 0.8); // 2 Hz variação
+    double base = 1.65 + 0.3 * sin(t * 2.0 * M_PI * 2.0 + ch * 0.8); // 2 Hz variação
     double noise = ((double)rand()/RAND_MAX - 0.5) * 0.01; // ±5mV
     // Picos ocasionais em canal 0
     if (ch == 0 && ((int)(t*5)) % 17 == 0) base += 0.05;
@@ -223,7 +226,7 @@ static inline void precise_sleep(double seconds) {
 
 static void* acquisition_thread(void* arg) {
     (void)arg;
-    printf("🚀 Thread multi-channel iniciada (%d canais @ %d Hz)") ;
+    printf("🚀 Thread multi-channel iniciada (%d canais @ %d Hz)\n", CHANNEL_COUNT, SAMPLE_RATE);
     double start = now_ts();
     double next = start;
     double interval = 1.0 / SAMPLE_RATE; // ciclo
