@@ -307,11 +307,10 @@ def main():
     
     try:
         # Executar servidor web
-        app.run_server(
+        app.run(
             host='0.0.0.0',  # Acessível de qualquer IP
             port=8050,
-            debug=False,
-            dev_tools_hot_reload=False
+            debug=False
         )
     except KeyboardInterrupt:
         monitor.signal_handler(None, None)
