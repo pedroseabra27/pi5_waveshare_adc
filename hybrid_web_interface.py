@@ -22,32 +22,32 @@ import subprocess
 import threading
 
 class HighSpeedWebInterface:
-    def __init__(self, display_rate=25, window_seconds=8, auto_start=True):
+    def __init__(self, display_rate: int = 25, window_seconds: int = 8, auto_start: bool = True):
+        """Inicializa a interface.
+
+        Args:
+            display_rate: taxa de atualização do gráfico (Hz).
+            window_seconds: janela temporal mostrada (s).
+            auto_start: se True tenta iniciar o engine; se False apenas anexa.
         """
-        Interface web que lê do C engine via shared memory.
-        
-        Parâmetros:
-        - display_rate: Taxa de atualização da interface (Hz)
-        - window_seconds: Janela de tempo no gráfico
-        """
+        # Parâmetros básicos
         self.display_rate = display_rate
         self.window_seconds = window_seconds
         self.running = True
-        
-    # Configurações shared memory
-    self.shm_name = "/adc_data"
-    self.buffer_size = 10000
-    self.sample_size = 24  # sizeof(struct sample_data) (double,double,int)
-    # O shared buffer tem cabeçalho antes do array; vamos inferir dinamicamente depois de mapear
-    self.shm_size = 1024*1024  # mapear até 1MB (suficiente) em leitura
-    self.header_parsed = False
-    self.header_size = 0
-        
-        # Buffers para interface
-        self.time_buffer = deque(maxlen=8000)  # 8 segundos a 1000 Hz
-        self.voltage_buffer = deque(maxlen=8000)
-        
-        # Estatísticas
+
+        # Shared memory (iremos detectar layout depois; mapeamos 1MB para segurança)
+        self.shm_name = "/adc_data"
+        self.buffer_size = 10000
+        self.sample_size = 24  # double + double + int (8+8+4) + possível padding
+        self.shm_size = 1024 * 1024  # 1MB
+        self.header_parsed = False
+        self.header_size = 0
+
+        # Buffers de visualização
+        self.time_buffer = deque(maxlen=self.window_seconds * 1000)
+        self.voltage_buffer = deque(maxlen=self.window_seconds * 1000)
+
+        # Estatísticas runtime
         self.stats = {
             'total_samples': 0,
             'actual_rate': 0.0,
@@ -57,19 +57,19 @@ class HighSpeedWebInterface:
             'voltage_std': 0.0,
             'c_engine_status': 'Desconectado'
         }
-        
-        # Shared memory handle
+
+        # Handles de shared memory
         self.shm_fd = None
         self.shm_data = None
         self.last_read_index = 0
-        
-    # C Engine process (se iniciado por aqui)
-    self.c_engine_process = None
-    self.auto_start = auto_start
 
-    print("🌐 Interface Web Híbrida Inicializada")
-    print(f"📺 Taxa de atualização: {self.display_rate} Hz")
-    print(f"🪟 Janela: {self.window_seconds} segundos")
+        # Processo do engine (se iniciado pela UI)
+        self.c_engine_process = None
+        self.auto_start = auto_start
+
+        print("🌐 Interface Web Híbrida Inicializada")
+        print(f"📺 Taxa de atualização: {self.display_rate} Hz")
+        print(f"🪟 Janela: {self.window_seconds} segundos")
     
     def start_c_engine(self):
         """Iniciar o engine C em background."""
